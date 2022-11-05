@@ -18,6 +18,7 @@
 """Various sampling methods."""
 import functools
 
+import time 
 import torch
 import numpy as np
 import abc
@@ -29,7 +30,7 @@ from models import utils as mutils
 
 _CORRECTORS = {}
 _PREDICTORS = {}
-
+t_list = []
 
 def register_predictor(cls=None, *, name=None):
   """A decorator for registering predictor classes."""
@@ -401,11 +402,12 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
       timesteps = torch.linspace(sde.T, eps, sde.N, device=device)
 
       for i in range(sde.N):
+        t_s = time.time()
         t = timesteps[i]
         vec_t = torch.ones(shape[0], device=t.device) * t
         x, x_mean = corrector_update_fn(x, vec_t, model=model)
         x, x_mean = predictor_update_fn(x, vec_t, model=model)
-
+        t_list.append(time.time() - t_s)      
       return inverse_scaler(x_mean if denoise else x), sde.N * (n_steps + 1)
 
   return pc_sampler
