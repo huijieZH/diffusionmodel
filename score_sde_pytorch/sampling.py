@@ -200,6 +200,32 @@ class ReverseDiffusionPredictor(Predictor):
     x = x_mean + G[:, None, None, None] * z
     return x, x_mean
 
+@register_predictor(name='cold_diffusion')
+class ColdDiffusionPredictor(Predictor):
+  def __init__(self, sde, score_fn, probability_flow=False):
+    super().__init__(sde, score_fn, probability_flow)
+    G_t = None
+    
+  def update_fn(self, x, t):
+    f, G = self.rsde.discretize(x, t)
+    z = torch.randn_like(x)
+    x_mean = x - f
+    x = x_mean + G[:, None, None, None] * z
+    return x, x_mean
+
+@register_predictor(name='reverse_diffusion_momentum')
+class ColdDiffusionPredictor(Predictor):
+  def __init__(self, sde, score_fn, probability_flow=False):
+    super().__init__(sde, score_fn, probability_flow)
+    G_t = None
+    
+  def update_fn(self, x, t):
+    f, G = self.rsde.discretize(x, t)
+    z = torch.randn_like(x)
+    x_mean = x - f
+    x = x_mean + G[:, None, None, None] * z
+    return x, x_mean
+
 
 @register_predictor(name='ancestral_sampling')
 class AncestralSamplingPredictor(Predictor):
