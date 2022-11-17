@@ -109,6 +109,11 @@ def get_sampling_fn(config, sde, shape, inverse_scaler, eps):
   elif sampler_name.lower() == 'pc':
     predictor = get_predictor(config.sampling.predictor.lower())
     corrector = get_corrector(config.sampling.corrector.lower())
+    use_momentum = "momentum" in config.sampling.predictor.lower()
+    if use_momentum:
+      momentum_gamma = config.sampling.momentum_gamma
+    else:
+      momentum_gamma = None
     sampling_fn = get_pc_sampler(sde=sde,
                                  shape=shape,
                                  predictor=predictor,
@@ -120,7 +125,9 @@ def get_sampling_fn(config, sde, shape, inverse_scaler, eps):
                                  continuous=config.training.continuous,
                                  denoise=config.sampling.noise_removal,
                                  eps=eps,
-                                 device=config.device)
+                                 device=config.device,
+                                 use_momentum = use_momentum,
+                                 momentum_gamma = momentum_gamma)
   else:
     raise ValueError(f"Sampler name {sampler_name} unknown.")
 
@@ -219,20 +226,32 @@ class ColdDiffusionPredictor(Predictor):
 @register_predictor(name='reverse_diffusion_momentumv1')
 ## only add momentum to the probabilty flow part
 class ReverseDiffusionMoentumV1(Predictor):
-  def __init__(self, sde, score_fn, probability_flow=False):
+  def __init__(self, sde, score_fn, momentum_gamma, probability_flow=False):
     super().__init__(sde, score_fn, probability_flow)
-    self.gamma = 0.9
+    self.gamma = momentum_gamma
     
   def update_fn(self, x, t, f_v):
     f, G = self.rsde.discretize(x, t)
     z = torch.randn_like(x)
-    if self.f_v is None:
-      self.f_v = self.gamma * f
-    else:
-      self.f_v = self.gamma * self.f_v + f
-    x_mean = x - self.f_v
+    f_v = self.gamma * f_v + f
+    x_mean = x - f_v
     x = x_mean + G[:, None, None, None] * z
-    return x, x_mean
+    return x, x_mean, f_v
+
+@register_predictor(name='reverse_diffusion_momentumv2')
+## add momentum to both the probabilty flow part and the noise part
+class ReverseDiffusionMoentumV1(Predictor):
+  def __init__(self, sde, score_fn, momentum_gamma, probability_flow=False):
+    super().__init__(sde, score_fn, probability_flow)
+    self.gamma = momentum_gamma
+    
+  def update_fn(self, x, t, f_v):
+    f, G = self.rsde.discretize(x, t)
+    z = torch.randn_like(x)
+    f_v = self.gamma * f_v + f - G[:, None, None, None] * z
+    x_mean = x - f_v
+    x = x_mean 
+    return x, x_mean, f_v
 
 
 @register_predictor(name='ancestral_sampling')
@@ -375,6 +394,16 @@ def shared_predictor_update_fn(x, t, sde, model, predictor, probability_flow, co
     predictor_obj = predictor(sde, score_fn, probability_flow)
   return predictor_obj.update_fn(x, t)
 
+def shared_predictor_momentum_update_fn(x, t, f_v, sde, model, predictor, momentum_gamma, probability_flow, continuous):
+  """A wrapper that configures and returns the update function of predictors."""
+  score_fn = mutils.get_score_fn(sde, model, train=False, continuous=continuous)
+  if predictor is None:
+    # Corrector-only sampler
+    predictor_obj = NonePredictor(sde, score_fn, probability_flow)
+  else:
+    predictor_obj = predictor(sde, score_fn, momentum_gamma, probability_flow)
+  return predictor_obj.update_fn(x, t, f_v)
+
 
 def shared_corrector_update_fn(x, t, sde, model, corrector, continuous, snr, n_steps):
   """A wrapper tha configures and returns the update function of correctors."""
@@ -388,7 +417,7 @@ def shared_corrector_update_fn(x, t, sde, model, corrector, continuous, snr, n_s
 
 
 def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
-                   n_steps=1, probability_flow=False, continuous=False,
+                   n_steps=1, probability_flow=False, continuous=False, momentum_gamma=0.9,
                    denoise=True, eps=1e-3, device='cuda', use_momentum = False):
   """Create a Predictor-Corrector (PC) sampler.
 
@@ -410,11 +439,19 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
     A sampling function that returns samples and the number of function evaluations during sampling.
   """
   # Create predictor & corrector update functions
-  predictor_update_fn = functools.partial(shared_predictor_update_fn,
-                                          sde=sde,
-                                          predictor=predictor,
-                                          probability_flow=probability_flow,
-                                          continuous=continuous)
+  if not use_momentum:
+    predictor_update_fn = functools.partial(shared_predictor_update_fn,
+                                            sde=sde,
+                                            predictor=predictor,
+                                            probability_flow=probability_flow,
+                                            continuous=continuous)
+  else:
+    predictor_update_fn = functools.partial(shared_predictor_momentum_update_fn,
+                                            sde=sde,
+                                            predictor=predictor,
+                                            momentum_gamma= momentum_gamma,
+                                            probability_flow=probability_flow,
+                                            continuous=continuous)    
   corrector_update_fn = functools.partial(shared_corrector_update_fn,
                                           sde=sde,
                                           corrector=corrector,
@@ -455,14 +492,14 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
       # Initial sample
       x = sde.prior_sampling(shape).to(device)
       timesteps = torch.linspace(sde.T, eps, sde.N, device=device)
-      f_v = None
+      f_v = torch.zeros(shape).to(device)
       for i in range(sde.N):
-        t_s = time.time()
+        # t_s = time.time()
         t = timesteps[i]
         vec_t = torch.ones(shape[0], device=t.device) * t
         x, x_mean = corrector_update_fn(x, vec_t, model=model)
-        x, x_mean = predictor_update_fn(x, vec_t, model=model)
-        t_list.append(time.time() - t_s)      
+        x, x_mean, f_v = predictor_update_fn(x, vec_t, f_v, model=model)
+        # t_list.append(time.time() - t_s)      
       return inverse_scaler(x_mean if denoise else x), sde.N * (n_steps + 1)    
 
   if not use_momentum:

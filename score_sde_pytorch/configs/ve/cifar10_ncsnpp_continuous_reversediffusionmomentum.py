@@ -29,6 +29,7 @@ def get_config():
   sampling = config.sampling
   sampling.method = 'pc'
   sampling.predictor = 'reverse_diffusion_momentumv1'
+  sampling.momentum_gamma = 0.1
   sampling.corrector = 'langevin'
 
   # model
