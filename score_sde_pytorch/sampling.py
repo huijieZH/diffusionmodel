@@ -355,7 +355,7 @@ def shared_corrector_update_fn(x, t, sde, model, corrector, continuous, snr, n_s
 
 def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
                    n_steps=1, probability_flow=False, continuous=False,
-                   denoise=True, eps=1e-3, device='cuda'):
+                   denoise=True, eps=1e-3, device='cuda', use_momentum = False):
   """Create a Predictor-Corrector (PC) sampler.
 
   Args:
@@ -409,8 +409,32 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
         x, x_mean = predictor_update_fn(x, vec_t, model=model)
         t_list.append(time.time() - t_s)      
       return inverse_scaler(x_mean if denoise else x), sde.N * (n_steps + 1)
+  
+  def pc_sampler_momentum(model):
+    """ The PC sampler funciton with momentum update
+    Args:
+      model: A score model.
+    Returns:
+      Samples, number of function evaluations.
+    """
+    with torch.no_grad():
+      # Initial sample
+      x = sde.prior_sampling(shape).to(device)
+      timesteps = torch.linspace(sde.T, eps, sde.N, device=device)
+      f_v = None
+      for i in range(sde.N):
+        t_s = time.time()
+        t = timesteps[i]
+        vec_t = torch.ones(shape[0], device=t.device) * t
+        x, x_mean = corrector_update_fn(x, vec_t, model=model)
+        x, x_mean = predictor_update_fn(x, vec_t, model=model)
+        t_list.append(time.time() - t_s)      
+      return inverse_scaler(x_mean if denoise else x), sde.N * (n_steps + 1)    
 
-  return pc_sampler
+  if not use_momentum:
+    return pc_sampler
+  else:
+    return pc_sampler_momentum
 
 
 def get_ode_sampler(sde, shape, inverse_scaler,
