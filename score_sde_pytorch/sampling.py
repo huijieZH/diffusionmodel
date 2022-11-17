@@ -32,6 +32,9 @@ _CORRECTORS = {}
 _PREDICTORS = {}
 t_list = []
 
+## use to store the momentum
+f_v = None
+
 def register_predictor(cls=None, *, name=None):
   """A decorator for registering predictor classes."""
 
@@ -197,6 +200,37 @@ class ReverseDiffusionPredictor(Predictor):
     f, G = self.rsde.discretize(x, t)
     z = torch.randn_like(x)
     x_mean = x - f
+    x = x_mean + G[:, None, None, None] * z
+    return x, x_mean
+
+@register_predictor(name='cold_diffusion')
+class ColdDiffusionPredictor(Predictor):
+  def __init__(self, sde, score_fn, probability_flow=False):
+    super().__init__(sde, score_fn, probability_flow)
+    G_t = None
+    
+  def update_fn(self, x, t):
+    f, G = self.rsde.discretize(x, t)
+    z = torch.randn_like(x)
+    x_mean = x - f
+    x = x_mean + G[:, None, None, None] * z
+    return x, x_mean
+
+@register_predictor(name='reverse_diffusion_momentumv1')
+## only add momentum to the probabilty flow part
+class ReverseDiffusionMoentumV1(Predictor):
+  def __init__(self, sde, score_fn, probability_flow=False):
+    super().__init__(sde, score_fn, probability_flow)
+    self.gamma = 0.9
+    
+  def update_fn(self, x, t, f_v):
+    f, G = self.rsde.discretize(x, t)
+    z = torch.randn_like(x)
+    if self.f_v is None:
+      self.f_v = self.gamma * f
+    else:
+      self.f_v = self.gamma * self.f_v + f
+    x_mean = x - self.f_v
     x = x_mean + G[:, None, None, None] * z
     return x, x_mean
 
