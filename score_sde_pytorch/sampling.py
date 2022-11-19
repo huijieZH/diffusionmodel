@@ -229,7 +229,9 @@ class ReverseDiffusionMoentumV1(Predictor):
   def __init__(self, sde, score_fn, momentum_gamma, probability_flow=False):
     super().__init__(sde, score_fn, probability_flow)
     self.gamma = momentum_gamma
-    
+    print(f"Momentum gamma is {self.gamma} for current experiment")
+
+
   def update_fn(self, x, t, f_v):
     f, G = self.rsde.discretize(x, t)
     z = torch.randn_like(x)
@@ -244,6 +246,7 @@ class ReverseDiffusionMoentumV1(Predictor):
   def __init__(self, sde, score_fn, momentum_gamma, probability_flow=False):
     super().__init__(sde, score_fn, probability_flow)
     self.gamma = momentum_gamma
+    
     
   def update_fn(self, x, t, f_v):
     f, G = self.rsde.discretize(x, t)

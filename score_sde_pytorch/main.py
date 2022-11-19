@@ -33,6 +33,7 @@ flags.DEFINE_string("eval_folder", "eval",
                     "The folder name for storing evaluation results")
 flags.mark_flags_as_required(["workdir", "config", "mode"])
 
+flags.DEFINE_float("momentum_gamma", 0, "Momentum gamma for memory previous direction.")
 
 def main(argv):
   gpus = tf.config.list_physical_devices('GPU')
