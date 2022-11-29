@@ -14,9 +14,8 @@
 # limitations under the License.
 
 # Lint as: python3
-"""Training NCSN++ on Church with VE SDE."""
-
-from configs.default_lsun_configs import get_default_configs
+"""Training NCSN++ on CIFAR-10 with VE SDE."""
+from configs.default_cifar10_configs import get_default_configs
 
 
 def get_config():
@@ -29,28 +28,21 @@ def get_config():
   # sampling
   sampling = config.sampling
   sampling.method = 'pc'
-  sampling.predictor = 'reverse_diffusion_momentumv2'
+  sampling.predictor = 'reverse_diffusion_momentumv1'
   sampling.momentum_gamma = 0.1
   sampling.corrector = 'langevin'
-
-  # data
-  data = config.data
-  data.dataset = 'CelebAHQ'
-  data.image_size = 256
-  data.tfrecords_path = '/home/yangsong/ncsc/celebahq/r08.tfrecords'
-
+  sampling.accumulate_t = True
 
   # model
   model = config.model
   model.name = 'ncsnpp'
-  model.sigma_max = 348
   model.scale_by_sigma = True
   model.ema_rate = 0.999
   model.normalization = 'GroupNorm'
   model.nonlinearity = 'swish'
   model.nf = 128
-  model.ch_mult = (1, 1, 2, 2, 2, 2, 2)
-  model.num_res_blocks = 2
+  model.ch_mult = (1, 2, 2, 2)
+  model.num_res_blocks = 4
   model.attn_resolutions = (16,)
   model.resamp_with_conv = True
   model.conditional = True
@@ -58,8 +50,8 @@ def get_config():
   model.fir_kernel = [1, 3, 3, 1]
   model.skip_rescale = True
   model.resblock_type = 'biggan'
-  model.progressive = 'output_skip'
-  model.progressive_input = 'input_skip'
+  model.progressive = 'none'
+  model.progressive_input = 'residual'
   model.progressive_combine = 'sum'
   model.attention_type = 'ddpm'
   model.init_scale = 0.

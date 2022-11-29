@@ -127,6 +127,7 @@ def get_sampling_fn(config, sde, shape, inverse_scaler, eps):
                                  eps=eps,
                                  device=config.device,
                                  use_momentum = use_momentum,
+                                 accumulate_t = config.sampling.accumulate_t,
                                  momentum_gamma = momentum_gamma)
   else:
     raise ValueError(f"Sampler name {sampler_name} unknown.")
@@ -419,7 +420,7 @@ def shared_corrector_update_fn(x, t, sde, model, corrector, continuous, snr, n_s
 
 def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
                    n_steps=1, probability_flow=False, continuous=False, momentum_gamma=0.9,
-                   denoise=True, eps=1e-3, device='cuda', use_momentum = False):
+                   denoise=True, eps=1e-3, device='cuda', use_momentum = False, accumulate_t = False):
   """Create a Predictor-Corrector (PC) sampler.
 
   Args:
@@ -489,12 +490,23 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
     Returns:
       Samples, number of function evaluations.
     """
+    nonlocal accumulate_t, momentum_gamma
     with torch.no_grad():
       # Initial sample
       x = sde.prior_sampling(shape).to(device)
       timesteps = torch.linspace(sde.T, eps, sde.N, device=device)
       f_v = torch.zeros(shape).to(device)
-      for i in range(sde.N):
+      list_i = []
+      if not accumulate_t:
+        list_i = range(sde.N)
+      else:
+        n = 1
+        accumulate_n = n/(1 - momentum_gamma) - momentum_gamma*(1 - momentum_gamma**n)/(1 - momentum_gamma)**2
+        while accumulate_n < sde.N:
+          list_i.append(round(accumulate_n))
+          n += 1
+          accumulate_n = n/(1 - momentum_gamma) - momentum_gamma*(1 - momentum_gamma**n)/(1 - momentum_gamma)**2
+      for i in list_i:
         # t_s = time.time()
         t = timesteps[i]
         vec_t = torch.ones(shape[0], device=t.device) * t
