@@ -64,7 +64,9 @@ def main(argv):
   elif FLAGS.mode == "eval":
     # Run the evaluation pipeline
     ## update momentum gamma
-    FLAGS.config.sampling.momentum_gamma = FLAGS.momentum_gamma
+    if 'momentum_gamma' in FLAGS.config.sampling.keys():
+      FLAGS.config.sampling.momentum_gamma = FLAGS.momentum_gamma
+      print(f"Momentum gamma is {FLAGS.config.sampling.momentum_gamma} for current experiment")
     run_lib.evaluate(FLAGS.config, FLAGS.workdir, FLAGS.eval_folder)
   else:
     raise ValueError(f"Mode {FLAGS.mode} not recognized.")
