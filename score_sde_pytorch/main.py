@@ -34,6 +34,7 @@ flags.DEFINE_string("eval_folder", "eval",
 flags.mark_flags_as_required(["workdir", "config", "mode"])
 
 flags.DEFINE_float("momentum_gamma", 0, "Momentum gamma for memory previous direction.")
+flags.DEFINE_integer("sample_num", 1000, "Sample iteration.")
 
 def main(argv):
   gpus = tf.config.list_physical_devices('GPU')
@@ -64,6 +65,9 @@ def main(argv):
   elif FLAGS.mode == "eval":
     # Run the evaluation pipeline
     ## update momentum gamma
+    FLAGS.config.sampling.sample_num = FLAGS.sample_num 
+    print(f"Predictor is {FLAGS.config.sampling.predictor} for current experiment")
+    print(f"Sample iteration is {FLAGS.config.sampling.sample_num} for current experiment")
     if 'momentum_gamma' in FLAGS.config.sampling.keys():
       FLAGS.config.sampling.momentum_gamma = FLAGS.momentum_gamma
       print(f"Momentum gamma is {FLAGS.config.sampling.momentum_gamma} for current experiment")
