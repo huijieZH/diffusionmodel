@@ -502,7 +502,7 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
       else:
         n = 1
         accumulate_n = n/(1 - momentum_gamma) - momentum_gamma*(1 - momentum_gamma**n)/(1 - momentum_gamma)**2
-        while accumulate_n < sde.N:
+        while round(accumulate_n) < sde.N:
           list_i.append(round(accumulate_n))
           n += 1
           accumulate_n = n/(1 - momentum_gamma) - momentum_gamma*(1 - momentum_gamma**n)/(1 - momentum_gamma)**2

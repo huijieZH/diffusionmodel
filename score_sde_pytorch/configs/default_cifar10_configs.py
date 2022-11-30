@@ -33,7 +33,7 @@ def get_default_configs():
   evaluate.interval_ckpt = 1
   evaluate.batch_size = 1024
   evaluate.enable_sampling = True
-  evaluate.num_samples = 50000
+  evaluate.num_samples = 10000
   evaluate.enable_loss = True
   evaluate.enable_bpd = False
   evaluate.bpd_dataset = 'test'
