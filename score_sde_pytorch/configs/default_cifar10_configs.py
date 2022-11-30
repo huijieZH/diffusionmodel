@@ -25,6 +25,8 @@ def get_default_configs():
   sampling.noise_removal = True
   sampling.probability_flow = False
   sampling.snr = 0.16
+  sampling.sample_num = 1000
+  sampling.accumulate_t = False # accumulate t in momentum
 
   # evaluation
   config.eval = evaluate = ml_collections.ConfigDict()
