@@ -110,6 +110,7 @@ def get_sampling_fn(config, sde, shape, inverse_scaler, eps):
     predictor = get_predictor(config.sampling.predictor.lower())
     corrector = get_corrector(config.sampling.corrector.lower())
     use_momentum = "momentum" in config.sampling.predictor.lower()
+    use_DDIM = "ddim" in config.sampling.predictor.lower()
     if use_momentum:
       momentum_gamma = config.sampling.momentum_gamma
     else:
@@ -127,6 +128,7 @@ def get_sampling_fn(config, sde, shape, inverse_scaler, eps):
                                  eps=eps,
                                  device=config.device,
                                  use_momentum = use_momentum,
+                                 use_DDIM = use_DDIM,
                                  accumulate_t = config.sampling.accumulate_t,
                                  momentum_gamma = momentum_gamma,
                                  sample_num = config.sampling.sample_num)
@@ -254,8 +256,28 @@ class ReverseDiffusionMoentumV1(Predictor):
     f_v = self.gamma * f_v + f - G[:, None, None, None] * z
     x_mean = x - f_v
     x = x_mean 
-    return x, x_mean, f_v
+    return x, x_mean, f_v  
+    
+@register_predictor(name='ddim')
+## approximate the sampling using large t interval
+class DDIM_acceleration(Predictor):
+  def __init__(self, sde, score_fn, probability_flow=False):
+    super().__init__(sde, score_fn, probability_flow)
+  def update_fn(self, x, t_start, t_end, i_interval):
+    timestep_start = (t_start * (self.sde.N - 1) / self.sde.T).long()
+    timestep_end = (t_end * (self.sde.N - 1) / self.sde.T).long()
+    sigma_start = self.sde.discrete_sigmas.to(t_start.device)[timestep_start]
+    sigma_end = self.sde.discrete_sigmas.to(t_start.device)[timestep_end]
+    adjacent_sigma = torch.where(timestep_start == 0, torch.zeros_like(timestep_start),
+                                 self.sde.discrete_sigmas.to(timestep_start.device)[timestep_start - 1].to(timestep_start.device))
 
+    G_adjacent = torch.sqrt(sigma_start ** 2 - adjacent_sigma ** 2)
+    G = torch.sqrt(sigma_start ** 2 - sigma_end ** 2)
+    f = - G_adjacent[:, None, None, None] ** 2 * self.score_fn(x, t_start) * i_interval
+    z = torch.randn_like(x)
+    x_mean = x - f + G[:, None, None, None] * z
+    x = x_mean 
+    return x, x_mean
 
 @register_predictor(name='ancestral_sampling')
 class AncestralSamplingPredictor(Predictor):
@@ -407,6 +429,16 @@ def shared_predictor_momentum_update_fn(x, t, f_v, sde, model, predictor, moment
     predictor_obj = predictor(sde, score_fn, momentum_gamma, probability_flow)
   return predictor_obj.update_fn(x, t, f_v)
 
+def shared_predictor_ddim_update_fn(x, t_start, t_end, i_interval, sde, model, predictor, probability_flow, continuous):
+  """A wrapper that configures and returns the update function of predictors."""
+  score_fn = mutils.get_score_fn(sde, model, train=False, continuous=continuous)
+  if predictor is None:
+    # Corrector-only sampler
+    predictor_obj = NonePredictor(sde, score_fn, probability_flow)
+  else:
+    predictor_obj = predictor(sde, score_fn, probability_flow)
+  return predictor_obj.update_fn(x, t_start, t_end, i_interval)
+
 
 def shared_corrector_update_fn(x, t, sde, model, corrector, continuous, snr, n_steps):
   """A wrapper tha configures and returns the update function of correctors."""
@@ -421,7 +453,7 @@ def shared_corrector_update_fn(x, t, sde, model, corrector, continuous, snr, n_s
 
 def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
                    n_steps=1, probability_flow=False, continuous=False, momentum_gamma=0.9,
-                   denoise=True, eps=1e-3, device='cuda', use_momentum = False, accumulate_t = False, sample_num = 1000):
+                   denoise=True, eps=1e-3, device='cuda', use_momentum = False, use_DDIM = False, accumulate_t = False, sample_num = 1000):
   """Create a Predictor-Corrector (PC) sampler.
 
   Args:
@@ -442,25 +474,68 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
     A sampling function that returns samples and the number of function evaluations during sampling.
   """
   # Create predictor & corrector update functions
-  if not use_momentum:
-    predictor_update_fn = functools.partial(shared_predictor_update_fn,
-                                            sde=sde,
-                                            predictor=predictor,
-                                            probability_flow=probability_flow,
-                                            continuous=continuous)
-  else:
+  if use_momentum:
     predictor_update_fn = functools.partial(shared_predictor_momentum_update_fn,
                                             sde=sde,
                                             predictor=predictor,
                                             momentum_gamma= momentum_gamma,
                                             probability_flow=probability_flow,
-                                            continuous=continuous)    
+                                            continuous=continuous)   
+  elif use_DDIM:
+    predictor_update_fn = functools.partial(shared_predictor_ddim_update_fn,
+                                            sde=sde,
+                                            predictor=predictor,
+                                            probability_flow=probability_flow,
+                                            continuous=continuous)       
+  else:
+     predictor_update_fn = functools.partial(shared_predictor_update_fn,
+                                            sde=sde,
+                                            predictor=predictor,
+                                            probability_flow=probability_flow,
+                                            continuous=continuous)
+  # if not use_momentum:
+  #   predictor_update_fn = functools.partial(shared_predictor_update_fn,
+  #                                           sde=sde,
+  #                                           predictor=predictor,
+  #                                           probability_flow=probability_flow,
+  #                                           continuous=continuous)
+  # else:
+  #   predictor_update_fn = functools.partial(shared_predictor_momentum_update_fn,
+  #                                           sde=sde,
+  #                                           predictor=predictor,
+  #                                           momentum_gamma= momentum_gamma,
+  #                                           probability_flow=probability_flow,
+  #                                           continuous=continuous)    
   corrector_update_fn = functools.partial(shared_corrector_update_fn,
                                           sde=sde,
                                           corrector=corrector,
                                           continuous=continuous,
                                           snr=snr,
                                           n_steps=n_steps)
+
+  def pc_DDIM_sampler(model):
+    """ The PC sampler funciton using DDIM sampling acceleration
+    Args:
+      model: A score model.
+    Returns:
+      Samples, number of function evaluations.
+    """
+    with torch.no_grad():
+      # Initial sample
+      x = sde.prior_sampling(shape).to(device)
+      timesteps = torch.linspace(sde.T, eps, sde.N, device=device)
+      nonlocal sample_num
+      itersteps = torch.linspace(0, sde.N-1, min(sde.N, sample_num), dtype=torch.int16, device=device)
+      for i in range(len(itersteps) - 1):
+        t_s = time.time()
+        t_start = timesteps[itersteps[i]]
+        t_end = timesteps[itersteps[i + 1]]
+        vec_t_start = torch.ones(shape[0], device=t_start.device) * t_start
+        vec_t_end = torch.ones(shape[0], device=t_end.device) * t_end
+        x, x_mean = corrector_update_fn(x, vec_t_start, model=model)
+        x, x_mean = predictor_update_fn(x, vec_t_start, vec_t_end, itersteps[i + 1] - itersteps[i], model=model)
+        t_list.append(time.time() - t_s)      
+      return inverse_scaler(x_mean if denoise else x), sde.N * (n_steps + 1)
 
   def pc_sampler(model):
     """ The PC sampler funciton.
@@ -516,10 +591,12 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
         # t_list.append(time.time() - t_s)      
       return inverse_scaler(x_mean if denoise else x), sde.N * (n_steps + 1)    
 
-  if not use_momentum:
-    return pc_sampler
-  else:
+  if use_momentum:
     return pc_sampler_momentum
+  elif use_DDIM:
+    return pc_DDIM_sampler
+  else:
+    return pc_sampler
 
 
 def get_ode_sampler(sde, shape, inverse_scaler,
