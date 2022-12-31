@@ -267,7 +267,8 @@ class DDIM_acceleration(Predictor):
     timestep_start = (t_start * (self.sde.N - 1) / self.sde.T).long()
     timestep_end = (t_end * (self.sde.N - 1) / self.sde.T).long()
     sigma_start = self.sde.discrete_sigmas.to(t_start.device)[timestep_start]
-    sigma_end = self.sde.discrete_sigmas.to(t_start.device)[timestep_end]
+    sigma_end = torch.where(timestep_start == 0, torch.zeros_like(timestep_start),
+                                 self.sde.discrete_sigmas.to(timestep_start.device)[timestep_end].to(timestep_start.device))
     adjacent_sigma = torch.where(timestep_start == 0, torch.zeros_like(timestep_start),
                                  self.sde.discrete_sigmas.to(timestep_start.device)[timestep_start - 1].to(timestep_start.device))
 
@@ -275,8 +276,8 @@ class DDIM_acceleration(Predictor):
     G = torch.sqrt(sigma_start ** 2 - sigma_end ** 2)
     f = - G_adjacent[:, None, None, None] ** 2 * self.score_fn(x, t_start) * i_interval
     z = torch.randn_like(x)
-    x_mean = x - f + G[:, None, None, None] * z
-    x = x_mean 
+    x_mean = x - f 
+    x = x_mean + G[:, None, None, None] * z
     return x, x_mean
 
 @register_predictor(name='ancestral_sampling')
@@ -492,20 +493,7 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
                                             sde=sde,
                                             predictor=predictor,
                                             probability_flow=probability_flow,
-                                            continuous=continuous)
-  # if not use_momentum:
-  #   predictor_update_fn = functools.partial(shared_predictor_update_fn,
-  #                                           sde=sde,
-  #                                           predictor=predictor,
-  #                                           probability_flow=probability_flow,
-  #                                           continuous=continuous)
-  # else:
-  #   predictor_update_fn = functools.partial(shared_predictor_momentum_update_fn,
-  #                                           sde=sde,
-  #                                           predictor=predictor,
-  #                                           momentum_gamma= momentum_gamma,
-  #                                           probability_flow=probability_flow,
-  #                                           continuous=continuous)    
+                                            continuous=continuous)                                
   corrector_update_fn = functools.partial(shared_corrector_update_fn,
                                           sde=sde,
                                           corrector=corrector,
@@ -525,7 +513,8 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
       x = sde.prior_sampling(shape).to(device)
       timesteps = torch.linspace(sde.T, eps, sde.N, device=device)
       nonlocal sample_num
-      itersteps = torch.linspace(0, sde.N-1, min(sde.N, sample_num), dtype=torch.int16, device=device)
+      itersteps = torch.linspace(0, sde.N - 1, min(sde.N, sample_num), dtype=torch.int16, device=device)
+      # For the all iterations except the one from 999 - 1000
       for i in range(len(itersteps) - 1):
         t_s = time.time()
         t_start = timesteps[itersteps[i]]
@@ -534,7 +523,10 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
         vec_t_end = torch.ones(shape[0], device=t_end.device) * t_end
         x, x_mean = corrector_update_fn(x, vec_t_start, model=model)
         x, x_mean = predictor_update_fn(x, vec_t_start, vec_t_end, itersteps[i + 1] - itersteps[i], model=model)
-        t_list.append(time.time() - t_s)      
+        t_list.append(time.time() - t_s) 
+      vec_t_start = torch.ones(shape[0], device=device) * timesteps[-1]
+      x, x_mean = corrector_update_fn(x, vec_t_start, model=model) 
+      x, x_mean = predictor_update_fn(x, vec_t_start, vec_t_start, 1, model=model) 
       return inverse_scaler(x_mean if denoise else x), sde.N * (n_steps + 1)
 
   def pc_sampler(model):
